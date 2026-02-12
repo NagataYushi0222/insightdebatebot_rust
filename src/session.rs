@@ -314,6 +314,15 @@ impl SessionManager {
         // Attach event handler to the voice call
         {
             let mut handler = call.lock().await;
+            
+            // Enable audio decoding: Opus → PCM i16 (mono, 16kHz)
+            handler.set_config(
+                songbird::Config::default()
+                    .decode_mode(songbird::driver::DecodeMode::Decode)
+                    .decode_channels(songbird::driver::Channels::Mono)
+                    .decode_sample_rate(songbird::driver::SampleRate::Hz16000)
+            );
+            
             handler.add_global_event(
                 songbird::CoreEvent::VoiceTick.into(),
                 crate::bot::VoiceReceiver {

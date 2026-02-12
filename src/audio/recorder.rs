@@ -1,10 +1,8 @@
-//! Per-user audio recorder with Opus encoding
+//! Per-user audio recorder with PCM recording
 //!
-//! Records Discord voice audio and saves directly as Opus/OGG files
+//! Records Discord voice audio as decoded PCM and saves as WAV files
 
 use dashmap::DashMap;
-use ogg;
-use parking_lot::RwLock;
 use serenity::model::id::UserId;
 use songbird::events::context_data::VoiceTick;
 use std::collections::HashMap;
@@ -16,6 +14,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
 
+/// Audio configuration constants
+/// These must match the songbird Config (DecodeMode::Decode with Mono/16kHz)
+const SAMPLE_RATE: u32 = 16000;
+const CHANNELS: u16 = 1;
+const BITS_PER_SAMPLE: u16 = 16;
+
 #[derive(Error, Debug)]
 pub enum RecorderError {
     #[error("IO error: {0}")]
@@ -24,10 +28,10 @@ pub enum RecorderError {
     NoData,
 }
 
-/// Per-user audio buffer
+/// Per-user audio buffer storing decoded PCM samples
 struct UserAudioBuffer {
-    /// Raw Opus frames received from Discord
-    opus_frames: Vec<Vec<u8>>,
+    /// Decoded PCM i16 samples (mono, 16kHz)
+    pcm_samples: Vec<i16>,
     /// Timestamp when recording started for this user
     start_time: u64,
 }
@@ -35,7 +39,7 @@ struct UserAudioBuffer {
 impl UserAudioBuffer {
     fn new() -> Self {
         Self {
-            opus_frames: Vec::new(),
+            pcm_samples: Vec::new(),
             start_time: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -43,22 +47,22 @@ impl UserAudioBuffer {
         }
     }
 
-    fn add_frame(&mut self, data: Vec<u8>) {
-        self.opus_frames.push(data);
+    fn add_samples(&mut self, samples: &[i16]) {
+        self.pcm_samples.extend_from_slice(samples);
     }
 
     fn is_empty(&self) -> bool {
-        self.opus_frames.is_empty()
+        self.pcm_samples.is_empty()
     }
 
-    fn take_frames(&mut self) -> Vec<Vec<u8>> {
-        std::mem::take(&mut self.opus_frames)
+    fn take_samples(&mut self) -> Vec<i16> {
+        std::mem::take(&mut self.pcm_samples)
     }
 }
 
 /// User-specific audio recorder
 ///
-/// Collects Opus audio frames from Discord and saves them as OGG files
+/// Collects decoded PCM audio from Discord and saves as WAV files
 pub struct UserRecorder {
     /// Per-user audio buffers
     user_buffers: DashMap<UserId, UserAudioBuffer>,
@@ -90,48 +94,36 @@ impl UserRecorder {
 
     /// Process incoming voice tick from Songbird
     ///
-    /// This is called for each voice packet received
+    /// Uses decoded PCM samples (requires DecodeMode::Decode)
     pub fn process_voice_tick(&self, tick: &VoiceTick) {
         for (ssrc, data) in &tick.speaking {
             // Use SSRC as temporary User ID (u32 -> u64)
             let user_id = UserId::new(*ssrc as u64);
 
-            if let Some(rtp) = &data.packet {
-                // RtpData has: packet (raw bytes), payload_offset, payload_end_pad
-                let start = rtp.payload_offset;
-                let end = rtp.packet.len() - rtp.payload_end_pad;
-                if start < end {
-                    let payload = &rtp.packet[start..end];
-                    if !payload.is_empty() {
-                        self.add_opus_packet(user_id, payload);
-                    }
+            // Use decoded PCM voice data (available with DecodeMode::Decode)
+            if let Some(decoded) = &data.decoded_voice {
+                if !decoded.is_empty() {
+                    self.add_pcm_samples(user_id, decoded);
                 }
             }
         }
     }
 
-    /// Add audio data for a specific user
-    pub fn add_audio_data(&self, user_id: UserId, opus_data: &[u8]) {
-        let mut entry = self.user_buffers.entry(user_id).or_insert_with(UserAudioBuffer::new);
-        entry.add_frame(opus_data.to_vec());
-        debug!("Added {} bytes for user {}", opus_data.len(), user_id);
-    }
-
-    /// Add raw Opus packet from voice receive handler
-    pub fn add_opus_packet(&self, user_id: UserId, opus_packet: &[u8]) {
-        if opus_packet.is_empty() {
+    /// Add decoded PCM samples for a specific user
+    pub fn add_pcm_samples(&self, user_id: UserId, samples: &[i16]) {
+        if samples.is_empty() {
             return;
         }
         
         let mut entry = self.user_buffers.entry(user_id).or_insert_with(UserAudioBuffer::new);
-        entry.add_frame(opus_packet.to_vec());
+        entry.add_samples(samples);
         
         // Print a dot for activity (like Python version)
         print!(".");
         std::io::stdout().flush().ok();
     }
 
-    /// Flush all user audio to files
+    /// Flush all user audio to WAV files
     ///
     /// Returns a map of user_id -> file_path for saved audio
     pub async fn flush_audio(&self) -> Result<HashMap<UserId, PathBuf>, RecorderError> {
@@ -150,18 +142,18 @@ impl UserRecorder {
                     continue;
                 }
 
-                let frames = buffer.take_frames();
+                let samples = buffer.take_samples();
                 let filename = format!(
-                    "{}_{}_{}",
+                    "{}_{}_{}", 
                     self.session_timestamp,
                     user_id.get(),
                     current_time
                 );
                 
-                // Save as raw Opus data (we'll wrap in OGG container)
-                match self.save_opus_frames(&filename, &frames) {
+                // Save as WAV file
+                match self.save_wav_audio(&filename, &samples) {
                     Ok(path) => {
-                        info!("Saved audio for user {} to {:?}", user_id, path);
+                        info!("Saved {} PCM samples for user {} to {:?}", samples.len(), user_id, path);
                         saved_files.insert(user_id, path);
                     }
                     Err(e) => {
@@ -178,63 +170,45 @@ impl UserRecorder {
         Ok(saved_files)
     }
 
-    /// Save Opus frames to an OGG file
-    fn save_opus_frames(&self, filename: &str, frames: &[Vec<u8>]) -> Result<PathBuf, RecorderError> {
-        let opus_path = self.temp_dir.join(format!("{}.ogg", filename));
+    /// Save PCM samples as a WAV file
+    fn save_wav_audio(&self, filename: &str, samples: &[i16]) -> Result<PathBuf, RecorderError> {
+        let wav_path = self.temp_dir.join(format!("{}.wav", filename));
         
-        // Open file for writing
-        let file = File::create(&opus_path)?;
-        let mut packet_writer = ogg::PacketWriter::new(file);
+        let mut file = File::create(&wav_path)?;
         
-        // 1. Write Opus ID Header
-        let mut id_header = Vec::new();
-        id_header.extend_from_slice(b"OpusHead"); // Magic
-        id_header.push(1); // Version (major=1)
-        id_header.push(2); // Channels (Stereo)
-        // Pre-skip (usually 3840 for 48kHz, but 0 is acceptable for simple storage)
-        id_header.extend_from_slice(&(0u16).to_le_bytes()); 
-        // Input Sample Rate (48000 Hz)
-        id_header.extend_from_slice(&(48000u32).to_le_bytes()); 
-        // Output Gain (0 dB = 0 in Q7.8 format which is actually just 0)
-        id_header.extend_from_slice(&(0i16).to_le_bytes()); 
-        // Channel Mapping Family (0 = mono/stereo)
-        id_header.push(0); 
-
-        packet_writer.write_packet(id_header, 0, ogg::PacketWriteEndInfo::EndPage, 0)?;
-
-        // 2. Write Opus Comment Header (Tags)
-        let mut comment_header = Vec::new();
-        comment_header.extend_from_slice(b"OpusTags"); // Magic
+        let data_size = (samples.len() * 2) as u32; // i16 = 2 bytes each
+        let byte_rate = SAMPLE_RATE * CHANNELS as u32 * BITS_PER_SAMPLE as u32 / 8;
+        let block_align = CHANNELS * BITS_PER_SAMPLE / 8;
         
-        // Vendor String Length
-        let vendor = b"InsightBot";
-        comment_header.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
-        comment_header.extend_from_slice(vendor);
+        // RIFF header
+        file.write_all(b"RIFF")?;
+        file.write_all(&(36 + data_size).to_le_bytes())?;
+        file.write_all(b"WAVE")?;
         
-        // User Comment List Length (0 items)
-        comment_header.extend_from_slice(&(0u32).to_le_bytes());
+        // fmt sub-chunk
+        file.write_all(b"fmt ")?;
+        file.write_all(&16u32.to_le_bytes())?;          // Sub-chunk size (16 for PCM)
+        file.write_all(&1u16.to_le_bytes())?;            // Audio format (1 = PCM)
+        file.write_all(&CHANNELS.to_le_bytes())?;        // Channels
+        file.write_all(&SAMPLE_RATE.to_le_bytes())?;     // Sample rate
+        file.write_all(&byte_rate.to_le_bytes())?;       // Byte rate
+        file.write_all(&block_align.to_le_bytes())?;     // Block align
+        file.write_all(&BITS_PER_SAMPLE.to_le_bytes())?; // Bits per sample
         
-        packet_writer.write_packet(comment_header, 0, ogg::PacketWriteEndInfo::EndPage, 0)?;
-
-        // 3. Write Audio Packets
-        // Granule position calculation: 48kHz * 20ms = 960 samples per frame
-        let mut granule_pos: u64 = 0;
+        // data sub-chunk
+        file.write_all(b"data")?;
+        file.write_all(&data_size.to_le_bytes())?;
         
-        for (i, frame) in frames.iter().enumerate() {
-            granule_pos += 960;
-            
-            // Determine end info
-            let end_info = if i == frames.len() - 1 {
-                ogg::PacketWriteEndInfo::EndStream
-            } else {
-                ogg::PacketWriteEndInfo::NormalPacket
-            };
-            
-            packet_writer.write_packet(frame.clone(), 0, end_info, granule_pos)?;
+        // Write PCM samples as little-endian i16
+        for &sample in samples {
+            file.write_all(&sample.to_le_bytes())?;
         }
         
-        info!("Saved {} Opus frames to {:?}", frames.len(), opus_path);
-        Ok(opus_path)
+        info!("Saved WAV file: {:?} ({} samples, {:.1}s)", 
+            wav_path, samples.len(), 
+            samples.len() as f64 / SAMPLE_RATE as f64);
+        
+        Ok(wav_path)
     }
 
     /// Clear all buffers without saving
@@ -264,8 +238,9 @@ mod tests {
         let recorder = UserRecorder::new(temp.path()).unwrap();
         
         let user_id = UserId::new(12345);
-        recorder.add_opus_packet(user_id, &[0x00, 0x01, 0x02, 0x03]);
-        recorder.add_opus_packet(user_id, &[0x04, 0x05, 0x06, 0x07]);
+        // Add PCM samples instead of raw Opus
+        recorder.add_pcm_samples(user_id, &[100, -100, 200, -200]);
+        recorder.add_pcm_samples(user_id, &[300, -300, 400, -400]);
         
         assert!(recorder.has_data());
         assert_eq!(recorder.user_count(), 1);
@@ -273,5 +248,9 @@ mod tests {
         let files = recorder.flush_audio().await.unwrap();
         assert_eq!(files.len(), 1);
         assert!(files.contains_key(&user_id));
+        
+        // Verify the file ends in .wav
+        let path = files.get(&user_id).unwrap();
+        assert_eq!(path.extension().unwrap(), "wav");
     }
 }

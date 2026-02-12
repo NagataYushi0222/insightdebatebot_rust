@@ -20,9 +20,7 @@ songbird = { version = "0.4", features = ["driver", "receive"] }
 # Async runtime
 tokio = { version = "1.42", features = ["full"] }
 
-# Audio processing - using opus via songbird, no separate crate needed
-# Songbird handles Opus internally
-ogg = "0.9"
+# Audio: Songbird handles Opus internally, we save decoded PCM as WAV
 
 # HTTP client for Gemini API
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
