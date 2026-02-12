@@ -97,7 +97,9 @@ impl GuildSession {
                 let interval_secs = settings.recording_interval;
 
                 // Wait for interval
+                info!("Waiting for next analysis interval: {}s", interval_secs);
                 tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+                info!("Analysis interval fired for guild: {}", guild_id);
 
                 // Check if still active
                 {
@@ -164,6 +166,7 @@ pub async fn perform_analysis(
     };
 
     if audio_files.is_empty() {
+        info!("[{}] No audio data collected in this interval. Skipping analysis.", guild_id);
         return Ok(());
     }
 
