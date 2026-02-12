@@ -1,0 +1,9 @@
+services:
+  insight-bot:
+    build: .
+    restart: always
+    volumes:
+      - ./temp_audio:/app/temp_audio
+      - ./bot_settings.db:/app/bot_settings.db
+    env_file:
+      - .env
