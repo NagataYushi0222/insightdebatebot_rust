@@ -58,11 +58,17 @@ pub async fn handle_start(
     // Get songbird manager
     let manager = songbird::get(ctx).await.ok_or("Songbird not registered")?;
 
+    // Force leave if already connected (Handling ghost connections)
+    if manager.get(guild_id).is_some() {
+        let _ = manager.remove(guild_id).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+
     // Join voice channel
     let call = manager.join(guild_id, voice_channel_id).await?;
 
     // Create session
-    let session_arc = session_manager.create_session(guild_id, command.channel_id, call).await?;
+    let _session_arc = session_manager.create_session(guild_id, command.channel_id, call).await?;
     
     // Register all users currently in the voice channel
     /* TEMPORARILY DISABLED FOR DEBUGGING
