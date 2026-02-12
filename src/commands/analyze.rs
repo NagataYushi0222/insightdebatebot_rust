@@ -27,26 +27,28 @@ pub async fn handle_start(
     command: &CommandInteraction,
     session_manager: Arc<SessionManager>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Defer immediately to avoid "Unknown interaction"
+    command.defer(&ctx.http).await?;
+
     let guild_id = command.guild_id.ok_or("Must be used in a guild")?;
     
     // Get user's voice channel from guild cache
     let voice_channel_id = {
         let guild = ctx.cache.guild(guild_id).ok_or("Guild not in cache")?;
-        guild
-            .voice_states
-            .get(&command.user.id)
-            .and_then(|vs| vs.channel_id)
-            .ok_or("ボイスチャットに参加してからコマンドを実行してください。")?
+        match guild.voice_states.get(&command.user.id).and_then(|vs| vs.channel_id) {
+            Some(id) => id,
+            None => {
+                respond_edit(ctx, command, "ボイスチャットに参加してからコマンドを実行してください。").await?;
+                return Ok(());
+            }
+        }
     };
 
     // Check if already recording
     if session_manager.get_session(guild_id).is_some() {
-        respond(ctx, command, "既に分析を実行中です。").await?;
+        respond_edit(ctx, command, "既に分析を実行中です。").await?;
         return Ok(());
     }
-
-    // Defer response
-    command.defer(&ctx.http).await?;
 
     // Get songbird manager
     let manager = songbird::get(ctx).await.ok_or("Songbird not registered")?;
@@ -107,15 +109,18 @@ pub async fn handle_stop(
     command: &CommandInteraction,
     session_manager: Arc<SessionManager>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Defer immediately
+    command.defer(&ctx.http).await?;
+
     let guild_id = command.guild_id.ok_or("Must be used in a guild")?;
 
     // Check if recording
     if session_manager.get_session(guild_id).is_none() {
-        respond(ctx, command, "分析は実行されていません。").await?;
+        respond_edit(ctx, command, "分析は実行されていません。").await?;
         return Ok(());
     }
 
-    respond(ctx, command, "🔄 最終レポートを作成して終了します。しばらくお待ちください...").await?;
+    respond_edit(ctx, command, "🔄 最終レポートを作成して終了します。しばらくお待ちください...").await?;
 
     // Cleanup session (runs final analysis)
     session_manager.cleanup_session(guild_id, ctx.http.clone()).await?;
@@ -137,15 +142,18 @@ pub async fn handle_now(
     command: &CommandInteraction,
     session_manager: Arc<SessionManager>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Defer immediately
+    command.defer(&ctx.http).await?;
+    
     let guild_id = command.guild_id.ok_or("Must be used in a guild")?;
 
     // Check if recording
     if session_manager.get_session(guild_id).is_none() {
-        respond(ctx, command, "分析は実行されていません。先に /analyze_start を実行してください。").await?;
+        respond_edit(ctx, command, "分析は実行されていません。先に /analyze_start を実行してください。").await?;
         return Ok(());
     }
 
-    respond(ctx, command, "🔄 手動分析を開始しました...").await?;
+    respond_edit(ctx, command, "🔄 手動分析を開始しました...").await?;
 
     // Force analysis
     if let Err(e) = session_manager.force_analysis(guild_id, ctx.http.clone()).await {
@@ -156,13 +164,12 @@ pub async fn handle_now(
     Ok(())
 }
 
-/// Helper to send a response
-async fn respond(
+/// Helper to send a deferred response
+async fn respond_edit(
     ctx: &Context,
     command: &CommandInteraction,
     content: &str,
 ) -> Result<(), serenity::Error> {
-    command.create_response(&ctx.http, CreateInteractionResponse::Message(
-        CreateInteractionResponseMessage::new().content(content)
-    )).await
+    command.edit_response(&ctx.http, EditInteractionResponse::new().content(content)).await?;
+    Ok(())
 }
