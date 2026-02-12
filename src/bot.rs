@@ -83,6 +83,9 @@ impl EventHandler for Handler {
                     )
                     .await
                 }
+                "analyze_debug" => {
+                    commands::analyze::handle_debug(&ctx, &command).await
+                }
                 "settings" => {
                     commands::settings::handle(&ctx, &command, self.state.db.clone()).await
                 }

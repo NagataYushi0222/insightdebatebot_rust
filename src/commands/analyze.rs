@@ -18,7 +18,56 @@ pub fn register() -> Vec<CreateCommand> {
             .description("分析を終了し、ボイスチャットから退出します"),
         CreateCommand::new("analyze_now")
             .description("すぐにレポートを作成します（分析間隔を待たずに実行）"),
+        CreateCommand::new("analyze_debug")
+            .description("Botの権限と状態を確認するデバッグコマンド"),
     ]
+}
+
+/// Handle /analyze_debug command
+pub async fn handle_debug(
+    ctx: &Context,
+    command: &CommandInteraction,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    command.defer(&ctx.http).await?;
+
+    let guild_id = command.guild_id.ok_or("Must be used in a guild")?;
+    let bot_user = ctx.http.get_current_user().await?;
+    
+    let mut info = format!("Debug Info:\nBot: {} ({})\nGuild: {}\n", bot_user.name, bot_user.id, guild_id);
+
+    // Get user's voice channel
+    let maybe_channel_id = ctx.cache.guild(guild_id)
+        .and_then(|g| g.voice_states.get(&command.user.id).and_then(|vs| vs.channel_id));
+
+    if let Some(channel_id) = maybe_channel_id {
+        info.push_str(&format!("Target Voice Channel: {}\n", channel_id));
+        
+        // Check permissions
+        // Note: permissions_in requires Guild cache. We use guild-level perms for now or try to get it.
+        // First get member (async)
+        if let Ok(member) = ctx.http.get_member(guild_id, bot_user.id).await {
+            if let Some(guild) = ctx.cache.guild(guild_id) {
+                 // Calculate permissions (no await here)
+                 if let Ok(perms) = guild.user_permissions_in(channel_id, &member) {
+                     info.push_str(&format!("Permissions in channel:\n"));
+                     info.push_str(&format!("  - CONNECT: {}\n", perms.contains(serenity::model::permissions::Permissions::CONNECT)));
+                     info.push_str(&format!("  - SPEAK: {}\n", perms.contains(serenity::model::permissions::Permissions::SPEAK)));
+                     info.push_str(&format!("  - ADMINISTRATOR: {}\n", perms.contains(serenity::model::permissions::Permissions::ADMINISTRATOR)));
+                 } else {
+                     info.push_str("Could not calculate channel permissions (user_permissions_in failed).\n");
+                 }
+            } else {
+                 info.push_str("Guild not in cache.\n");
+            }
+        } else {
+             info.push_str("Could not fetch Bot Member from API.\n");
+        }
+    } else {
+        info.push_str("User is NOT in a voice channel. Please join one.\n");
+    }
+    
+    respond_edit(ctx, command, &format!("```\n{}\n```", info)).await?;
+    Ok(())
 }
 
 /// Handle /analyze_start command
