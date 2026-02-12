@@ -60,6 +60,7 @@ pub async fn handle_start(
     let session_arc = session_manager.create_session(guild_id, command.channel_id, call).await?;
     
     // Register all users currently in the voice channel
+    /* TEMPORARILY DISABLED FOR DEBUGGING
     {
         // 1. Collect member data first (CacheRef is not Send, so can't be held across await)
         let members_to_register: Vec<(u64, String)> = {
@@ -83,6 +84,7 @@ pub async fn handle_start(
             session.register_user(serenity::model::id::UserId::new(user_id_u64), name);
         }
     }
+    */
     
     // Start analysis loop
     session_manager.start_analysis_loop(guild_id, ctx.http.clone());
