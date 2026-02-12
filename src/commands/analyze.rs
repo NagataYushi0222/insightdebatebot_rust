@@ -33,14 +33,19 @@ pub async fn handle_start(
     let guild_id = command.guild_id.ok_or("Must be used in a guild")?;
     
     // Get user's voice channel from guild cache
-    let voice_channel_id = {
+    let maybe_channel_id = {
         let guild = ctx.cache.guild(guild_id).ok_or("Guild not in cache")?;
-        match guild.voice_states.get(&command.user.id).and_then(|vs| vs.channel_id) {
-            Some(id) => id,
-            None => {
-                respond_edit(ctx, command, "ボイスチャットに参加してからコマンドを実行してください。").await?;
-                return Ok(());
-            }
+        guild
+            .voice_states
+            .get(&command.user.id)
+            .and_then(|vs| vs.channel_id)
+    };
+
+    let voice_channel_id = match maybe_channel_id {
+        Some(id) => id,
+        None => {
+            respond_edit(ctx, command, "ボイスチャットに参加してからコマンドを実行してください。").await?;
+            return Ok(());
         }
     };
 
