@@ -113,6 +113,12 @@ pub async fn handle_start(
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
 
+    // Force leave if already connected (Handling ghost connections)
+    if manager.get(guild_id).is_some() {
+        let _ = manager.remove(guild_id).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+
     // Join voice channel
     let call = manager.join(guild_id, voice_channel_id).await?;
 
