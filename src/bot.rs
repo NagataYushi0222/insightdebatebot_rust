@@ -12,7 +12,7 @@ use serenity::async_trait;
 use songbird::events::{Event, EventContext, EventHandler as VoiceEventHandler, TrackEvent};
 use songbird::{CoreEvent, SerenityInit};
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Bot state shared across handlers
 pub struct BotState {

@@ -59,16 +59,26 @@ pub async fn handle_start(
     
     // Register all users currently in the voice channel
     {
-        let guild = ctx.cache.guild(guild_id).ok_or("Guild not in cache")?;
+        // 1. Collect member data first (CacheRef is not Send, so can't be held across await)
+        let members_to_register: Vec<(u64, String)> = {
+            let guild = ctx.cache.guild(guild_id).ok_or("Guild not in cache")?;
+            
+            guild.voice_states.iter()
+                .filter(|(_, vs)| vs.channel_id == Some(voice_channel_id))
+                .map(|(user_id, _)| {
+                    // Use nickname (server display name) if available, else global name
+                    let name = guild.members.get(user_id)
+                        .map(|m| m.display_name().to_string())
+                        .unwrap_or_else(|| format!("User_{}", user_id));
+                    (user_id.get(), name)
+                })
+                .collect()
+        };
+
+        // 2. Register users (now safe to await)
         let session = session_arc.read().await;
-        for (user_id, voice_state) in &guild.voice_states {
-            if voice_state.channel_id == Some(voice_channel_id) {
-                // Use nickname (server display name) if available, else global name
-                let display_name = guild.members.get(user_id)
-                    .map(|m| m.display_name().to_string())
-                    .unwrap_or_else(|| format!("User_{}", user_id));
-                session.register_user(*user_id, display_name);
-            }
+        for (user_id_u64, name) in members_to_register {
+            session.register_user(serenity::model::id::UserId::new(user_id_u64), name);
         }
     }
     
