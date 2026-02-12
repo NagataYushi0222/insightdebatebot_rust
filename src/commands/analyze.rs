@@ -1,8 +1,7 @@
 //! Analyze commands: /analyze_start, /analyze_stop, /analyze_now
 
 use serenity::all::{
-    CommandInteraction, Context, CreateCommand, CreateInteractionResponse,
-    CreateInteractionResponseMessage, EditInteractionResponse, CreateMessage,
+    CommandInteraction, Context, CreateCommand, EditInteractionResponse, CreateMessage,
 };
 use std::sync::Arc;
 use tracing::info;
@@ -48,13 +47,14 @@ pub async fn handle_debug(
         if let Ok(member) = ctx.http.get_member(guild_id, bot_user.id).await {
             if let Some(guild) = ctx.cache.guild(guild_id) {
                  // Calculate permissions (no await here)
-                 if let Ok(perms) = guild.user_permissions_in(channel_id, &member) {
+                 if let Some(channel) = guild.channels.get(&channel_id) {
+                     let perms = guild.user_permissions_in(channel, &member);
                      info.push_str(&format!("Permissions in channel:\n"));
                      info.push_str(&format!("  - CONNECT: {}\n", perms.contains(serenity::model::permissions::Permissions::CONNECT)));
                      info.push_str(&format!("  - SPEAK: {}\n", perms.contains(serenity::model::permissions::Permissions::SPEAK)));
                      info.push_str(&format!("  - ADMINISTRATOR: {}\n", perms.contains(serenity::model::permissions::Permissions::ADMINISTRATOR)));
                  } else {
-                     info.push_str("Could not calculate channel permissions (user_permissions_in failed).\n");
+                     info.push_str("Could not find channel in guild cache.\n");
                  }
             } else {
                  info.push_str("Guild not in cache.\n");
