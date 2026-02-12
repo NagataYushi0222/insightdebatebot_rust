@@ -110,11 +110,14 @@ impl VoiceEventHandler for VoiceReceiver {
                 self.recorder.process_voice_tick(tick);
             }
             EventContext::SpeakingStateUpdate(speaking) => {
+                info!("Received SpeakingStateUpdate: {:?}", speaking);
                 // Map SSRC to Discord UserId for correct user identification
                 // speaking.user_id is songbird's UserId, convert to serenity's UserId
                 if let Some(user_id) = speaking.user_id {
                     let serenity_user_id = serenity::model::id::UserId::new(user_id.0);
                     self.recorder.register_ssrc(speaking.ssrc, serenity_user_id);
+                } else {
+                    warn!("SpeakingStateUpdate missing user_id for SSRC {}", speaking.ssrc);
                 }
             }
             _ => {}
