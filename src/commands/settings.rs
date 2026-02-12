@@ -59,9 +59,12 @@ pub async fn handle(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let guild_id = command.guild_id.ok_or("Must be used in a guild")?;
 
+    // Defer response to avoid "Unknown interaction" timeout
+    command.defer(&ctx.http).await?;
+
     let options = &command.data.options();
     if options.is_empty() {
-        respond(ctx, command, "サブコマンドを指定してください。", true).await?;
+        respond(ctx, command, "サブコマンドを指定してください。").await?;
         return Ok(());
     }
 
@@ -80,7 +83,6 @@ pub async fn handle(
                                 ctx,
                                 command,
                                 &format!("✅ 分析モードを '{}' に変更しました。", mode.as_str()),
-                                false,
                             ).await?;
                             info!("Guild {} set mode to {}", guild_id, mode.as_str());
                         } else {
@@ -88,7 +90,6 @@ pub async fn handle(
                                 ctx,
                                 command,
                                 "❌ モードは 'debate' または 'summary' を指定してください。",
-                                true,
                             ).await?;
                         }
                     }
@@ -106,7 +107,6 @@ pub async fn handle(
                                 ctx,
                                 command,
                                 "❌ 間隔は最短60秒です。",
-                                true,
                             ).await?;
                         } else {
                             db.set_recording_interval(guild_id.get(), seconds)?;
@@ -118,7 +118,6 @@ pub async fn handle(
                                     seconds,
                                     seconds as f64 / 60.0
                                 ),
-                                false,
                             ).await?;
                             info!("Guild {} set interval to {}s", guild_id, seconds);
                         }
@@ -127,26 +126,23 @@ pub async fn handle(
             }
         }
         _ => {
-            respond(ctx, command, "不明なサブコマンドです。", true).await?;
+            respond(ctx, command, "不明なサブコマンドです。").await?;
         }
     }
 
     Ok(())
 }
 
-/// Helper to send a response
+/// Helper to send a response (using EditInteractionResponse since we deferred)
 async fn respond(
     ctx: &Context,
     command: &CommandInteraction,
     content: &str,
-    ephemeral: bool,
 ) -> Result<(), serenity::Error> {
-    command.create_response(
+    use serenity::all::EditInteractionResponse;
+    
+    command.edit_response(
         &ctx.http,
-        CreateInteractionResponse::Message(
-            CreateInteractionResponseMessage::new()
-                .content(content)
-                .ephemeral(ephemeral),
-        ),
-    ).await
+        EditInteractionResponse::new().content(content),
+    ).await.map(|_| ())
 }
