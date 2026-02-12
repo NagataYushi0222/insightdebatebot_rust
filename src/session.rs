@@ -167,15 +167,17 @@ pub async fn perform_analysis(
         return Ok(());
     }
 
-    // Convert OGG files to MP3 for better Gemini API compatibility
+    // Convert WAV files to MP3 for better Gemini API compatibility
     let mut mp3_files: HashMap<UserId, PathBuf> = HashMap::new();
-    for (user_id, ogg_path) in &audio_files {
-        match AudioProcessor::convert_to_mp3(ogg_path).await {
+    for (user_id, wav_path) in &audio_files {
+        match AudioProcessor::convert_to_mp3(wav_path).await {
             Ok(mp3_path) => {
                 mp3_files.insert(*user_id, mp3_path);
             }
             Err(e) => {
                 warn!("Failed to convert audio for user {}: {}", user_id, e);
+                // Clean up the WAV file that failed conversion
+                AudioProcessor::cleanup_files(&[wav_path.clone()]);
             }
         }
     }
@@ -184,6 +186,32 @@ pub async fn perform_analysis(
         return Ok(());
     }
 
+    // Ensure MP3 files are always cleaned up, even if analysis or posting fails
+    let result = perform_analysis_and_post(
+        &mp3_files, &session, &http, &analyzer, &db, &user_names, &context, guild_id, text_channel_id, is_final,
+    ).await;
+
+    // Always clean up MP3 files
+    let files_to_cleanup: Vec<PathBuf> = mp3_files.values().cloned().collect();
+    AudioProcessor::cleanup_files(&files_to_cleanup);
+
+    result
+}
+
+/// Inner function that performs analysis and posts results
+/// Separated so that cleanup always happens in the caller
+async fn perform_analysis_and_post(
+    mp3_files: &HashMap<UserId, PathBuf>,
+    session: &Arc<RwLock<GuildSession>>,
+    http: &Arc<Http>,
+    analyzer: &Arc<Analyzer>,
+    db: &Arc<Database>,
+    user_names: &DashMap<UserId, String>,
+    context: &str,
+    guild_id: GuildId,
+    text_channel_id: ChannelId,
+    is_final: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Build user map
     let user_map: HashMap<UserId, String> = mp3_files
         .keys()
@@ -263,10 +291,6 @@ pub async fn perform_analysis(
             thread.send_message(&http, CreateMessage::new().content(&*chunk_str)).await?;
         }
     }
-
-    // Cleanup MP3 files
-    let files_to_cleanup: Vec<PathBuf> = mp3_files.values().cloned().collect();
-    AudioProcessor::cleanup_files(&files_to_cleanup);
 
     Ok(())
 }
