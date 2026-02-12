@@ -167,8 +167,25 @@ pub async fn perform_analysis(
         return Ok(());
     }
 
+    // Convert OGG files to MP3 for better Gemini API compatibility
+    let mut mp3_files: HashMap<UserId, PathBuf> = HashMap::new();
+    for (user_id, ogg_path) in &audio_files {
+        match AudioProcessor::convert_to_mp3(ogg_path).await {
+            Ok(mp3_path) => {
+                mp3_files.insert(*user_id, mp3_path);
+            }
+            Err(e) => {
+                warn!("Failed to convert audio for user {}: {}", user_id, e);
+            }
+        }
+    }
+
+    if mp3_files.is_empty() {
+        return Ok(());
+    }
+
     // Build user map
-    let user_map: HashMap<UserId, String> = audio_files
+    let user_map: HashMap<UserId, String> = mp3_files
         .keys()
         .map(|&uid| {
             let name = user_names
@@ -208,7 +225,7 @@ pub async fn perform_analysis(
     thread.send_message(&http, analyzing_msg).await?;
 
     // Run analysis
-    let report = match analyzer.analyze_discussion(audio_files.clone(), &context, user_map, mode).await {
+    let report = match analyzer.analyze_discussion(mp3_files.clone(), &context, user_map, mode).await {
         Ok(r) => r,
         Err(crate::analyzer::AnalyzerError::RateLimitExceeded) => {
             "⚠️ 分析のリクエスト制限（Quota Limit）に達しました。".to_string()
@@ -247,8 +264,8 @@ pub async fn perform_analysis(
         }
     }
 
-    // Cleanup audio files
-    let files_to_cleanup: Vec<PathBuf> = audio_files.values().cloned().collect();
+    // Cleanup MP3 files
+    let files_to_cleanup: Vec<PathBuf> = mp3_files.values().cloned().collect();
     AudioProcessor::cleanup_files(&files_to_cleanup);
 
     Ok(())

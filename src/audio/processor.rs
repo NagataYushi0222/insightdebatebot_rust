@@ -1,11 +1,11 @@
 //! Audio processor for format conversion
 //!
-//! Handles conversion between audio formats if needed for Gemini API
+//! Handles conversion between audio formats using ffmpeg for Gemini API
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[derive(Error, Debug)]
 pub enum ProcessorError {
@@ -13,29 +13,19 @@ pub enum ProcessorError {
     Io(#[from] std::io::Error),
     #[error("File not found: {0}")]
     NotFound(PathBuf),
+    #[error("FFmpeg conversion failed: {0}")]
+    ConversionFailed(String),
 }
 
 /// Audio processor for format operations
 pub struct AudioProcessor;
 
 impl AudioProcessor {
-    /// Check if a file needs conversion for Gemini API
-    ///
-    /// Gemini API accepts: audio/mp3, audio/wav, audio/ogg, audio/flac
-    /// Since we save as Opus (.opus files), we may need to wrap in OGG container
-    pub fn needs_conversion(path: &Path) -> bool {
-        // Opus raw files might need to be converted to OGG for API compatibility
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e == "opus")
-            .unwrap_or(false)
-    }
-
     /// Get MIME type for audio file
     pub fn get_mime_type(path: &Path) -> &'static str {
         match path.extension().and_then(|e| e.to_str()) {
             Some("ogg") => "audio/ogg",
-            Some("opus") => "audio/ogg", // Opus in OGG container
+            Some("opus") => "audio/ogg",
             Some("mp3") => "audio/mp3",
             Some("wav") => "audio/wav",
             Some("flac") => "audio/flac",
@@ -44,17 +34,46 @@ impl AudioProcessor {
         }
     }
 
-    /// Convert Opus file to OGG container if needed
+    /// Convert an OGG/Opus file to MP3 using ffmpeg
     ///
-    /// For now, we keep Opus as-is since Gemini should accept audio/ogg
-    pub fn prepare_for_upload(path: &Path) -> Result<PathBuf, ProcessorError> {
-        if !path.exists() {
-            return Err(ProcessorError::NotFound(path.to_path_buf()));
+    /// Returns the path to the converted MP3 file
+    pub async fn convert_to_mp3(input_path: &Path) -> Result<PathBuf, ProcessorError> {
+        if !input_path.exists() {
+            return Err(ProcessorError::NotFound(input_path.to_path_buf()));
         }
 
-        // For now, just return the path as-is
-        // In a full implementation, we might wrap raw Opus in OGG container
-        Ok(path.to_path_buf())
+        let mp3_path = input_path.with_extension("mp3");
+
+        info!("Converting {:?} to MP3...", input_path);
+
+        let output = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-y",                    // Overwrite output
+                "-i",                    // Input file
+                input_path.to_str().unwrap_or(""),
+                "-ac", "1",              // Mono (reduce size)
+                "-ar", "16000",          // 16kHz sample rate (sufficient for speech)
+                "-b:a", "64k",           // 64kbps bitrate
+                "-f", "mp3",             // Output format
+                mp3_path.to_str().unwrap_or(""),
+            ])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            error!("FFmpeg conversion failed: {}", stderr);
+            return Err(ProcessorError::ConversionFailed(stderr.to_string()));
+        }
+
+        info!("Converted to MP3: {:?}", mp3_path);
+
+        // Remove original OGG file
+        if let Err(e) = fs::remove_file(input_path) {
+            warn!("Failed to remove original file {:?}: {}", input_path, e);
+        }
+
+        Ok(mp3_path)
     }
 
     /// Clean up temporary audio files
@@ -68,20 +87,6 @@ impl AudioProcessor {
             }
         }
     }
-
-    /// Get audio duration in seconds (approximate based on file size)
-    ///
-    /// For Opus at ~64kbps, we can estimate duration
-    pub fn estimate_duration(path: &Path) -> f64 {
-        match fs::metadata(path) {
-            Ok(meta) => {
-                let size = meta.len() as f64;
-                // Opus typically ~8KB/sec at 64kbps
-                size / 8000.0
-            }
-            Err(_) => 0.0,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -91,7 +96,7 @@ mod tests {
     #[test]
     fn test_mime_types() {
         assert_eq!(AudioProcessor::get_mime_type(Path::new("test.ogg")), "audio/ogg");
-        assert_eq!(AudioProcessor::get_mime_type(Path::new("test.opus")), "audio/ogg");
         assert_eq!(AudioProcessor::get_mime_type(Path::new("test.mp3")), "audio/mp3");
     }
 }
+

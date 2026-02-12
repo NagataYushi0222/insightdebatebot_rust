@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     libopus0 \
     ca-certificates \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
