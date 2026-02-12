@@ -94,6 +94,19 @@ impl EventHandler for Handler {
             }
         }
     }
+
+    async fn voice_state_update(&self, _: Context, old: Option<serenity::model::voice::VoiceState>, new: serenity::model::voice::VoiceState) {
+        info!(
+            "VoiceStateUpdate: User {} moved from {:?} to {:?}", 
+            new.user_id, 
+            old.as_ref().and_then(|o| o.channel_id), 
+            new.channel_id
+        );
+    }
+
+    async fn voice_server_update(&self, _: Context, event: serenity::model::event::VoiceServerUpdateEvent) {
+        info!("VoiceServerUpdate: Guild {:?} Endpoint {:?}", event.guild_id, event.endpoint);
+    }
 }
 
 /// Voice receive event handler
