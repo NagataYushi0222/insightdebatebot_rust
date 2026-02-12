@@ -225,7 +225,8 @@ impl Analyzer {
             GEMINI_API_BASE, file_name, self.api_key
         );
 
-        for _ in 0..30 {
+        // Wait up to 300 seconds (5 minutes)
+        for _ in 0..60 {
             let response = self.client.get(&url).send().await?;
             
             if response.status().is_success() {
@@ -238,7 +239,7 @@ impl Analyzer {
                 }
             }
             
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
         }
 
         Err(AnalyzerError::Api("File processing timeout".to_string()))
