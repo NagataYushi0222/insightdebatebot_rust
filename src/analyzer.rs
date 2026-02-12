@@ -264,6 +264,7 @@ impl Analyzer {
         audio_files: HashMap<UserId, PathBuf>,
         context_history: &str,
         user_map: HashMap<UserId, String>,
+        participant_names: Vec<String>,
         mode: AnalysisMode,
     ) -> Result<String, AnalyzerError> {
         if audio_files.is_empty() {
@@ -283,6 +284,16 @@ impl Analyzer {
         if !context_history.is_empty() {
             content_parts.push(PartRequest::Text {
                 text: format!("前回の文脈:\n{}\n---\n今回の議論:", context_history),
+            });
+        }
+
+        // Add participant names so Gemini can identify speakers
+        if !participant_names.is_empty() {
+            content_parts.push(PartRequest::Text {
+                text: format!(
+                    "参加者一覧: {}\n音声から各参加者を識別し、名前で発言をまとめてください。",
+                    participant_names.join(", ")
+                ),
             });
         }
 

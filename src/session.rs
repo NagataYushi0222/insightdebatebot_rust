@@ -212,16 +212,17 @@ async fn perform_analysis_and_post(
     text_channel_id: ChannelId,
     is_final: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Build user map
+    // Build user map for audio files (SSRC-based IDs, can't map to real users)
     let user_map: HashMap<UserId, String> = mp3_files
         .keys()
-        .map(|&uid| {
-            let name = user_names
-                .get(&uid)
-                .map(|r| r.value().clone())
-                .unwrap_or_else(|| format!("User_{}", uid));
-            (uid, name)
-        })
+        .enumerate()
+        .map(|(i, &uid)| (uid, format!("Speaker_{}", i + 1)))
+        .collect();
+
+    // Collect all registered participant names from the voice channel
+    let participant_names: Vec<String> = user_names
+        .iter()
+        .map(|r| r.value().clone())
         .collect();
 
     // Get settings
@@ -253,7 +254,7 @@ async fn perform_analysis_and_post(
     thread.send_message(&http, analyzing_msg).await?;
 
     // Run analysis
-    let report = match analyzer.analyze_discussion(mp3_files.clone(), &context, user_map, mode).await {
+    let report = match analyzer.analyze_discussion(mp3_files.clone(), &context, user_map, participant_names, mode).await {
         Ok(r) => r,
         Err(crate::analyzer::AnalyzerError::RateLimitExceeded) => {
             "⚠️ 分析のリクエスト制限（Quota Limit）に達しました。".to_string()

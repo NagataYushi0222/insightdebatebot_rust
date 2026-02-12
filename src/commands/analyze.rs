@@ -55,7 +55,22 @@ pub async fn handle_start(
     let call = manager.join(guild_id, voice_channel_id).await?;
 
     // Create session
-    let _session = session_manager.create_session(guild_id, command.channel_id, call).await?;
+    let session_arc = session_manager.create_session(guild_id, command.channel_id, call).await?;
+    
+    // Register all users currently in the voice channel
+    {
+        let guild = ctx.cache.guild(guild_id).ok_or("Guild not in cache")?;
+        let session = session_arc.read().await;
+        for (user_id, voice_state) in &guild.voice_states {
+            if voice_state.channel_id == Some(voice_channel_id) {
+                // Use nickname (server display name) if available, else global name
+                let display_name = guild.members.get(user_id)
+                    .map(|m| m.display_name().to_string())
+                    .unwrap_or_else(|| format!("User_{}", user_id));
+                session.register_user(*user_id, display_name);
+            }
+        }
+    }
     
     // Start analysis loop
     session_manager.start_analysis_loop(guild_id, ctx.http.clone());
