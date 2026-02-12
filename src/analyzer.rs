@@ -220,13 +220,14 @@ impl Analyzer {
 
     /// Wait for file to become active
     async fn wait_for_file_active(&self, file_name: &str) -> Result<(), AnalyzerError> {
+        // file_name is already "files/xxxx", so use it directly
         let url = format!(
-            "{}/files/{}?key={}",
+            "{}/{}?key={}",
             GEMINI_API_BASE, file_name, self.api_key
         );
 
-        // Wait up to 300 seconds (5 minutes)
-        for _ in 0..60 {
+        // Wait up to 60 seconds for file to become active
+        for _ in 0..30 {
             let response = self.client.get(&url).send().await?;
             
             if response.status().is_success() {
@@ -239,7 +240,7 @@ impl Analyzer {
                 }
             }
             
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
 
         Err(AnalyzerError::Api("File processing timeout".to_string()))
@@ -247,8 +248,9 @@ impl Analyzer {
 
     /// Delete a file from Gemini API
     async fn delete_file(&self, file_name: &str) -> Result<(), AnalyzerError> {
+        // file_name is already "files/xxxx", so use it directly
         let url = format!(
-            "{}/files/{}?key={}",
+            "{}/{}?key={}",
             GEMINI_API_BASE, file_name, self.api_key
         );
 
