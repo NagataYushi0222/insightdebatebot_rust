@@ -3,6 +3,7 @@
 //! Records Discord voice audio and saves directly as Opus/OGG files
 
 use dashmap::DashMap;
+use ogg;
 use parking_lot::RwLock;
 use serenity::model::id::UserId;
 use songbird::events::context_data::VoiceTick;
@@ -179,18 +180,57 @@ impl UserRecorder {
 
     /// Save Opus frames to an OGG file
     fn save_opus_frames(&self, filename: &str, frames: &[Vec<u8>]) -> Result<PathBuf, RecorderError> {
-        let ogg_path = self.temp_dir.join(format!("{}.ogg", filename));
+        let opus_path = self.temp_dir.join(format!("{}.ogg", filename));
         
-        // For now, save raw Opus frames concatenated
-        // In a full implementation, we'd properly wrap in OGG container
-        let opus_path = self.temp_dir.join(format!("{}.opus", filename));
+        // Open file for writing
+        let file = File::create(&opus_path)?;
+        let mut packet_writer = ogg::PacketWriter::new(file);
         
-        let mut file = File::create(&opus_path)?;
-        for frame in frames {
-            // Write frame length as u16 little-endian, then frame data
-            let len = frame.len() as u16;
-            file.write_all(&len.to_le_bytes())?;
-            file.write_all(frame)?;
+        // 1. Write Opus ID Header
+        let mut id_header = Vec::new();
+        id_header.extend_from_slice(b"OpusHead"); // Magic
+        id_header.push(1); // Version (major=1)
+        id_header.push(2); // Channels (Stereo)
+        // Pre-skip (usually 3840 for 48kHz, but 0 is acceptable for simple storage)
+        id_header.extend_from_slice(&(0u16).to_le_bytes()); 
+        // Input Sample Rate (48000 Hz)
+        id_header.extend_from_slice(&(48000u32).to_le_bytes()); 
+        // Output Gain (0 dB = 0 in Q7.8 format which is actually just 0)
+        id_header.extend_from_slice(&(0i16).to_le_bytes()); 
+        // Channel Mapping Family (0 = mono/stereo)
+        id_header.push(0); 
+
+        packet_writer.write_packet(id_header, 0, ogg::PacketWriteEndInfo::EndPage, 0)?;
+
+        // 2. Write Opus Comment Header (Tags)
+        let mut comment_header = Vec::new();
+        comment_header.extend_from_slice(b"OpusTags"); // Magic
+        
+        // Vendor String Length
+        let vendor = b"InsightBot";
+        comment_header.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+        comment_header.extend_from_slice(vendor);
+        
+        // User Comment List Length (0 items)
+        comment_header.extend_from_slice(&(0u32).to_le_bytes());
+        
+        packet_writer.write_packet(comment_header, 0, ogg::PacketWriteEndInfo::EndPage, 0)?;
+
+        // 3. Write Audio Packets
+        // Granule position calculation: 48kHz * 20ms = 960 samples per frame
+        let mut granule_pos: u64 = 0;
+        
+        for (i, frame) in frames.iter().enumerate() {
+            granule_pos += 960;
+            
+            // Determine end info
+            let end_info = if i == frames.len() - 1 {
+                ogg::PacketWriteEndInfo::EndStream
+            } else {
+                ogg::PacketWriteEndInfo::NormalPacket
+            };
+            
+            packet_writer.write_packet(frame.clone(), 0, end_info, granule_pos)?;
         }
         
         info!("Saved {} Opus frames to {:?}", frames.len(), opus_path);
