@@ -353,6 +353,12 @@ impl SessionManager {
                     recorder: session.recorder.clone(),
                 },
             );
+            handler.add_global_event(
+                songbird::CoreEvent::SpeakingStateUpdate.into(),
+                crate::bot::VoiceReceiver {
+                    recorder: session.recorder.clone(),
+                },
+            );
         }
 
         let session = Arc::new(RwLock::new(session));

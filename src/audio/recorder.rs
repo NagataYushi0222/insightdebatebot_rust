@@ -62,10 +62,13 @@ impl UserAudioBuffer {
 
 /// User-specific audio recorder
 ///
-/// Collects decoded PCM audio from Discord and saves as WAV files
+/// Collects decoded PCM audio from Discord and saves as WAV files.
+/// Uses SSRC-to-UserId mapping to correctly identify speakers.
 pub struct UserRecorder {
     /// Per-user audio buffers
     user_buffers: DashMap<UserId, UserAudioBuffer>,
+    /// SSRC to Discord UserId mapping (populated via SpeakingStateUpdate events)
+    ssrc_map: DashMap<u32, UserId>,
     /// Temporary audio directory
     temp_dir: PathBuf,
     /// Session timestamp for unique filenames
@@ -87,9 +90,16 @@ impl UserRecorder {
 
         Ok(Self {
             user_buffers: DashMap::new(),
+            ssrc_map: DashMap::new(),
             temp_dir,
             session_timestamp,
         })
+    }
+
+    /// Register SSRC-to-UserId mapping from SpeakingStateUpdate event
+    pub fn register_ssrc(&self, ssrc: u32, user_id: UserId) {
+        info!("Mapped SSRC {} -> UserId {}", ssrc, user_id);
+        self.ssrc_map.insert(ssrc, user_id);
     }
 
     /// Process incoming voice tick from Songbird
@@ -97,8 +107,14 @@ impl UserRecorder {
     /// Uses decoded PCM samples (requires DecodeMode::Decode)
     pub fn process_voice_tick(&self, tick: &VoiceTick) {
         for (ssrc, data) in &tick.speaking {
-            // Use SSRC as temporary User ID (u32 -> u64)
-            let user_id = UserId::new(*ssrc as u64);
+            // Look up real Discord UserId from SSRC mapping
+            let user_id = match self.ssrc_map.get(ssrc) {
+                Some(uid) => *uid,
+                None => {
+                    // Fallback: use SSRC as temporary ID (will show as User_XXXXX)
+                    UserId::new(*ssrc as u64)
+                }
+            };
 
             // Use decoded PCM voice data (available with DecodeMode::Decode)
             if let Some(decoded) = &data.decoded_voice {
